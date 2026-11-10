@@ -4,23 +4,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="NutraVision - Dual-View AI Food Segmentation & Nutritional Regression Analyzer">
-    <title>NutraVision - Dual-View Food Nutrition Analyzer</title>
+    <meta name="description" content="NutriScanAI - Dual-View AI Food Segmentation & Nutritional Regression Analyzer">
+    <title>NutriScanAI - Dual-View Food Nutrition Analyzer</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 
 <body>
 
     <header class="header">
         <div class="logo">
-            <img src="images/logo.png.jpeg" alt="nutra logo"> 
+            <img src="images/logo.png.jpeg" alt="NutriScanAI logo"> 
             <span>NutriScanAI</span> 
+            <span class="logo-pill">AI Vision &bull; Dual-View</span>
         </div>
 
         <nav>
             <a href="#home">Home</a>
             <a href="#analyzer">Analyzer</a>
-            <a href="#nutrition">Nutrition</a>
+            <a href="#nutrition">Nutrition Dashboard</a>
+            <a href="#about">How it Works</a>
             <a href="/docs" target="_blank" class="nav-api">Swagger API ↗</a>
         </nav>
     </header>
@@ -29,79 +34,108 @@
 
         <!-- Hero Section -->
         <section id="home" class="hero">
-            <h1>Dual-View Food Nutrition Analyzer</h1>
+            <div class="hero-badge">⚡ Powered by PyTorch DeepLabV3+ & Ollama Qwen3-VL</div>
+            <h1>Smart Dual-View AI Nutrition Analyzer</h1>
             <p>
-                Upload top-down and side photos of your meal to segment ingredients, calibrate real-world plate dimensions, estimate portion weights, and predict complete macro and micronutrition with regression models.
+                Capture your plate from above and side-level. NutriScanAI reconstructs food elevations, calculates portion volumes with real-world plate calibration, and predicts accurate macronutrients via CatBoost regression.
             </p>
-            <a href="#analyzer" class="primary-button">
-                Start Dual-View Analysis
-            </a>
+            <div class="hero-actions">
+                <a href="#analyzer" class="primary-button">
+                    Start Dual-View Analysis
+                </a>
+                <button type="button" class="secondary-button" onclick="loadSampleMeal(true)">
+                    🍛 Try With Sample Meal
+                </button>
+            </div>
         </section>
 
         <!-- Analyzer Section -->
         <section id="analyzer" class="analyzer">
 
             <div class="analyzer-card">
-                <h2>Analyze Your Meal (Dual Views)</h2>
-                <p class="subtitle">
-                    Provide two photos of the same serving for calibrated geometric volume estimation & regression modeling.
-                </p>
+                <div class="card-title-group">
+                    <div>
+                        <h2>Analyze Your Meal (Dual Views)</h2>
+                        <p class="subtitle">
+                            Provide paired top-down and side photos of the same plate for calibrated 3D volume reconstruction & regression modeling.
+                        </p>
+                    </div>
+
+                    <!-- Quick Demo Action Bar -->
+                    <div class="quick-demo-bar">
+                        <button type="button" class="btn-chip" onclick="loadSampleMeal(false)" title="Load sample rice & curry photos from repository">
+                            ⚡ Load Sample Meal
+                        </button>
+                        <button type="button" class="btn-chip btn-chip-secondary" onclick="clearUploads()" title="Clear current images">
+                            ✕ Clear
+                        </button>
+                    </div>
+                </div>
 
                 <!-- Dual Image Upload Area -->
                 <div class="dual-upload-grid">
 
                     <!-- Top View Upload Box -->
                     <div class="upload-panel" id="topUploadPanel">
-                        <label for="topImage">
-                            📸 <strong>Top-Down View</strong> (Overhead)
-                        </label>
-                        <span class="upload-hint">Directly above meal to capture area & rim</span>
+                        <div class="panel-header">
+                            <label for="topImage">
+                                📸 <strong>Top-Down View</strong> (Overhead)
+                            </label>
+                            <span class="badge-optional badge-req">Required</span>
+                        </div>
+                        <span class="upload-hint">Directly above meal to capture area & rim boundary</span>
                         
-                        <div class="preview-area" onclick="document.getElementById('topImage').click()">
+                        <div class="preview-area" id="topDropZone" onclick="document.getElementById('topImage').click()">
                             <img id="topPreview" src="" alt="Top-down preview">
                             <div id="topPlaceholder" class="placeholder-content">
                                 <span class="upload-icon">📷</span>
-                                <span class="placeholder-text">Click or browse Top View photo</span>
+                                <span class="placeholder-text">Click or drag & drop <strong>Top View</strong></span>
+                                <span class="placeholder-sub">JPG, PNG, WebP up to 40MB</span>
+                            </div>
+                            <div class="preview-overlay">
+                                <span>Change Image</span>
                             </div>
                         </div>
 
-                        <input
-                            type="file"
-                            id="topImage"
-                            accept="image/*"
-                        >
+                        <input type="file" id="topImage" accept="image/*">
                     </div>
 
                     <!-- Side View Upload Box -->
                     <div class="upload-panel" id="sideUploadPanel">
-                        <label for="sideImage">
-                            📐 <strong>Side View</strong> (Plate Level)
-                        </label>
-                        <span class="upload-hint">At plate level to gauge depth & food height</span>
+                        <div class="panel-header">
+                            <label for="sideImage">
+                                📐 <strong>Side View</strong> (Plate Level)
+                            </label>
+                            <span class="badge-optional">Recommended</span>
+                        </div>
+                        <span class="upload-hint">At plate level to gauge depth & food mound elevation</span>
                         
-                        <div class="preview-area" onclick="document.getElementById('sideImage').click()">
+                        <div class="preview-area" id="sideDropZone" onclick="document.getElementById('sideImage').click()">
                             <img id="sidePreview" src="" alt="Side-view preview">
                             <div id="sidePlaceholder" class="placeholder-content">
                                 <span class="upload-icon">📐</span>
-                                <span class="placeholder-text">Click or browse Side View photo</span>
+                                <span class="placeholder-text">Click or drag & drop <strong>Side View</strong></span>
+                                <span class="placeholder-sub">Auto-mirrored from top view if omitted</span>
+                            </div>
+                            <div class="preview-overlay">
+                                <span>Change Image</span>
                             </div>
                         </div>
 
-                        <input
-                            type="file"
-                            id="sideImage"
-                            accept="image/*"
-                        >
+                        <input type="file" id="sideImage" accept="image/*">
                     </div>
 
                 </div>
 
                 <!-- Plate Diameter Calibration Parameter -->
-                <div class="plate-setting">
-                    <label for="plateDiameter">
-                        🍽️ <strong>Plate Reference Diameter:</strong>
-                    </label>
-                    <select id="plateDiameter">
+                <div class="plate-setting-container">
+                    <div class="plate-setting-info">
+                        <label for="plateDiameter">
+                            🍽️ <strong>Plate Reference Diameter:</strong>
+                        </label>
+                        <span class="setting-desc">Used for pixel-to-centimeter Hough circle rim calibration</span>
+                    </div>
+                    <select id="plateDiameter" class="styled-select">
                         <option value="20">20 cm (Small / Breakfast Plate)</option>
                         <option value="25" selected>25 cm (Standard Dinner Plate)</option>
                         <option value="30">30 cm (Large Serving Platter)</option>
@@ -109,17 +143,17 @@
                 </div>
 
                 <!-- Analyze Button -->
-                <button
-                    id="analyzeButton"
-                    onclick="analyzeFood()"
-                >
-                    🔬 Analyze Food & Run Regression Models
+                <button id="analyzeButton" class="cta-analyze-button" onclick="analyzeFood()">
+                    <span class="btn-icon">🔬</span>
+                    <span class="btn-text">Analyze Food & Run Regression Models</span>
                 </button>
 
                 <!-- Result Container -->
                 <div id="result">
                     <div class="initial-prompt">
-                        <p>Upload your meal photos above and click <strong>Analyze Food</strong> to run segmentation and regression.</p>
+                        <div class="prompt-icon">🍽️</div>
+                        <h3>No Meal Analyzed Yet</h3>
+                        <p>Upload your meal photos above or click <strong>Load Sample Meal</strong> to run dual-view segmentation and nutrition prediction.</p>
                     </div>
                 </div>
 
@@ -130,63 +164,88 @@
         <!-- Nutrition Section -->
         <section id="nutrition" class="nutrition-section">
 
-            <h2>Overall Nutritional Breakdown</h2>
+            <div class="section-title-wrap">
+                <h2>Overall Nutritional Breakdown</h2>
+                <p>Complete macronutrient and micronutrient estimates calculated via CatBoost regression with 3-tier preparation resolution.</p>
+            </div>
 
             <div class="nutrition-grid">
 
-                <div class="nutrition-card">
-                    <h3>🔥 Calories</h3>
+                <div class="nutrition-card macro-card">
+                    <div class="card-icon">🔥</div>
+                    <h3>Calories</h3>
                     <p id="calories">-- kcal</p>
+                    <span class="nutrient-sub">Energy density</span>
                 </div>
 
-                <div class="nutrition-card">
-                    <h3>🍚 Carbohydrates</h3>
+                <div class="nutrition-card macro-card">
+                    <div class="card-icon">🍚</div>
+                    <h3>Carbohydrates</h3>
                     <p id="carbohydrates">-- g</p>
+                    <span class="nutrient-sub">Primary fuel</span>
                 </div>
 
-                <div class="nutrition-card">
-                    <h3>💪 Protein</h3>
+                <div class="nutrition-card macro-card">
+                    <div class="card-icon">💪</div>
+                    <h3>Protein</h3>
                     <p id="protein">-- g</p>
+                    <span class="nutrient-sub">Muscle & repair</span>
                 </div>
 
-                <div class="nutrition-card">
-                    <h3>🥑 Fats</h3>
+                <div class="nutrition-card macro-card">
+                    <div class="card-icon">🥑</div>
+                    <h3>Fats</h3>
                     <p id="fats">-- g</p>
+                    <span class="nutrient-sub">Healthy lipids</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🍬 Free Sugar</h3>
+                    <div class="card-icon">🍬</div>
+                    <h3>Free Sugar</h3>
                     <p id="free-sugar">-- g</p>
+                    <span class="nutrient-sub">Simple carbs</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🌾 Fibre</h3>
+                    <div class="card-icon">🌾</div>
+                    <h3>Fibre</h3>
                     <p id="fibre">-- g</p>
+                    <span class="nutrient-sub">Digestive health</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🧂 Sodium</h3>
+                    <div class="card-icon">🧂</div>
+                    <h3>Sodium</h3>
                     <p id="sodium">-- mg</p>
+                    <span class="nutrient-sub">Electrolyte balance</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🦴 Calcium</h3>
+                    <div class="card-icon">🦴</div>
+                    <h3>Calcium</h3>
                     <p id="calcium">-- mg</p>
+                    <span class="nutrient-sub">Bone structure</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🔬 Iron</h3>
+                    <div class="card-icon">🔬</div>
+                    <h3>Iron</h3>
                     <p id="iron">-- mg</p>
+                    <span class="nutrient-sub">Oxygen transport</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🍊 Vitamin C</h3>
+                    <div class="card-icon">🍊</div>
+                    <h3>Vitamin C</h3>
                     <p id="vitamin-c">-- mg</p>
+                    <span class="nutrient-sub">Antioxidant</span>
                 </div>
 
                 <div class="nutrition-card">
-                    <h3>🧬 Folate</h3>
+                    <div class="card-icon">🧬</div>
+                    <h3>Folate</h3>
                     <p id="folate">-- µg</p>
+                    <span class="nutrient-sub">Cellular repair</span>
                 </div>
 
             </div>
@@ -196,30 +255,35 @@
         <!-- About Section -->
         <section id="about" class="about">
 
-            <h2>How NutraVision Works</h2>
-
-            <p>
-                NutraVision combines PyTorch DeepLabV3+ semantic segmentation (MobileNetV2 backbone) trained on 104 FoodSeg categories with real-world circular plate rim scale calibration, food density conversion, and regression models.
-            </p>
+            <div class="section-title-wrap">
+                <h2>How NutraVision Works</h2>
+                <p>An end-to-end multi-stage pipeline designed for offline and edge deployment.</p>
+            </div>
 
             <div class="process">
 
-                <div>
-                    <span>1</span>
-                    <h3>Paired Capture</h3>
-                    <p>Top-down view captures footprint area; side view captures food elevation profile.</p>
+                <div class="process-card">
+                    <span class="process-step">1</span>
+                    <h3>Paired 3D Capture</h3>
+                    <p>Top-down view captures horizontal food footprint & plate rim; side view captures height elevation profile.</p>
                 </div>
 
-                <div>
-                    <span>2</span>
-                    <h3>Vision Segmentation</h3>
-                    <p>DeepLabV3+ model segments 104 food classes and detects plate rim scale.</p>
+                <div class="process-card">
+                    <span class="process-step">2</span>
+                    <h3>Vision & VLM Reasoning</h3>
+                    <p>DeepLabV3+ segments 104 food classes while Qwen3-VL (2B) identifies authentic culinary components without hardcoded rules.</p>
                 </div>
 
-                <div>
-                    <span>3</span>
-                    <h3>Regression Nutrition</h3>
-                    <p>Volume-to-weight density mapping feeds the regression model to output macros & micronutrients.</p>
+                <div class="process-card">
+                    <span class="process-step">3</span>
+                    <h3>Calibrated Density Geometry</h3>
+                    <p>Combines circular rim scale calibration with empirical IIIT Hyderabad portion bounds to prevent volume distortion.</p>
+                </div>
+
+                <div class="process-card">
+                    <span class="process-step">4</span>
+                    <h3>CatBoost Regression</h3>
+                    <p>3-tier preparation resolution feeds TF-IDF character n-grams into 5 CatBoost models for instant, verified nutrition totals.</p>
                 </div>
 
             </div>
@@ -230,9 +294,14 @@
 
     <!-- Footer -->
     <footer>
-        <p>
-            &copy; 2026 NutraVision. All rights reserved. Powered by FoodSeg103 & FastAPI.
-        </p>
+        <div class="footer-content">
+            <p>&copy; 2026 <strong>NutriScanAI</strong>. All rights reserved. Powered by FoodSeg103, Ollama Qwen3-VL, and CatBoost.</p>
+            <div class="footer-links">
+                <a href="#analyzer">Analyzer</a> &bull;
+                <a href="#nutrition">Nutrition</a> &bull;
+                <a href="/docs" target="_blank">API Docs</a>
+            </div>
+        </div>
     </footer>
 
     <script src="script.js"></script>

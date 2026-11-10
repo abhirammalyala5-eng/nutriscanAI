@@ -7,6 +7,10 @@ Model registry, artifact loader, and multi-target CatBoost prediction engine for
 
 import sys
 from pathlib import Path
+from typing import List, Dict, Any, Tuple, Optional
+import joblib
+from catboost import CatBoostRegressor
+from fastapi import HTTPException
 
 _DIR = Path(__file__).resolve().parent
 if str(_DIR) not in sys.path:
