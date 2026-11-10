@@ -4,9 +4,13 @@
     "max": 0.95,
     "examples": [
       "rice",
+      "steamed-rice",
+      "biryani",
+      "pulao",
+      "khichdi",
+      "bisi-bele-bath",
       "noodles",
-      "pasta",
-      "biryani"
+      "pasta"
     ]
   },
   "cooked_meat": {
@@ -14,49 +18,76 @@
     "max": 1.1,
     "examples": [
       "chicken",
+      "mutton",
+      "lamb",
+      "fish",
       "beef",
-      "pork",
-      "fish"
+      "pork"
     ]
   },
   "legume_or_curry": {
-    "min": 0.8,
+    "min": 0.85,
     "max": 1.15,
     "examples": [
       "dal",
-      "lentils",
-      "beans",
-      "curry"
+      "sambar",
+      "rasam",
+      "rajma",
+      "channa",
+      "chole",
+      "curry",
+      "gravy",
+      "pappu",
+      "pachi-pulusu",
+      "salan"
     ]
   },
   "vegetable": {
-    "min": 0.45,
-    "max": 0.95,
+    "min": 0.5,
+    "max": 0.9,
     "examples": [
-      "vegetables",
-      "onion",
-      "peas",
+      "vegetable",
+      "aloo",
+      "potato",
+      "gobi",
+      "cabbage",
+      "poriyal",
+      "fry",
+      "bhindi",
+      "beetroot",
       "salad",
       "herbs"
     ]
   },
   "sauce": {
-    "min": 0.8,
-    "max": 1.2,
+    "min": 0.85,
+    "max": 1.15,
     "examples": [
+      "chutney",
+      "pickle",
       "sauce",
-      "gravy",
-      "soup"
+      "gravy"
     ]
   },
   "bread": {
-    "min": 0.25,
-    "max": 0.7,
+    "min": 0.35,
+    "max": 0.55,
     "examples": [
-      "bread",
+      "phulka",
       "roti",
       "chapati",
-      "naan"
+      "naan",
+      "paratha",
+      "bread"
+    ]
+  },
+  "papad": {
+    "min": 0.15,
+    "max": 0.3,
+    "examples": [
+      "papad",
+      "pappadam",
+      "appalam"
     ]
   },
   "fruit": {
@@ -64,18 +95,35 @@
     "max": 1.05,
     "examples": [
       "fruit",
-      "apple",
+      "watermelon",
+      "papaya",
       "banana",
+      "muskmelon",
+      "apple",
       "mango"
     ]
   },
   "dairy": {
-    "min": 0.85,
+    "min": 0.95,
     "max": 1.15,
     "examples": [
-      "cheese",
+      "curd",
+      "dahi",
+      "raita",
       "paneer",
+      "cheese",
       "yogurt"
+    ]
+  },
+  "sweets": {
+    "min": 0.9,
+    "max": 1.25,
+    "examples": [
+      "payasam",
+      "kheer",
+      "halwa",
+      "gulab jamun",
+      "sweet"
     ]
   },
   "mixed_food": {

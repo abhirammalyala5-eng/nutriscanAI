@@ -5,242 +5,66 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 """
 🥦 NutraVision Prediction API
 ==============================
-FastAPI endpoint that accepts a JSON list of ingredients and returns
-per-ingredient nutritional info + recipe totals.
-
-Pipeline:
-  1. Parse ingredient text  → weight_g, food_name, preparation, category, attributes
-  2. TF-IDF (char_wb 2-5)  → TruncatedSVD (64 dims)
-  3. CatBoostRegressor      → 5 targets (energy_kcal, carb_g, protein_g, fat_g, fibre_g)
-  4. Scale by weight (predictions are per 100 g)
+FastAPI service orchestrating nutritional regression predictions, dual-view integration,
+and FrontEnd UI static file delivery.
 """
 
-import re
 import os
 import warnings
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
-import joblib
-import numpy as np
-import pandas as pd
-from catboost import CatBoostRegressor, Pool
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+import httpx
 
-warnings.filterwarnings("ignore")  # suppress sklearn version warnings
+import sys
+from pathlib import Path
 
-# ─────────────────────────────────────────────────────────────
-# 1.  PATHS
-# ─────────────────────────────────────────────────────────────
-MODEL_DIR = Path(__file__).parent          # same folder as app.py
+MODEL_DIR = Path(__file__).resolve().parent
+if str(MODEL_DIR) not in sys.path:
+    sys.path.insert(0, str(MODEL_DIR))
+if str(MODEL_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(MODEL_DIR.parent))
 
-TARGETS = ["energy_kcal", "carb_g", "protein_g", "fat_g", "fibre_g"]
-
-# ─────────────────────────────────────────────────────────────
-# 2.  LOAD ARTIFACTS  (once at startup)
-# ─────────────────────────────────────────────────────────────
-print("Loading NutraVision model artifacts...")
-
-vectorizer          = joblib.load(MODEL_DIR / "vectorizer.joblib")
-svd                 = joblib.load(MODEL_DIR / "svd.joblib")
-attribute_keywords  = joblib.load(MODEL_DIR / "attribute_keywords.joblib")
-attribute_names     = joblib.load(MODEL_DIR / "attribute_names.joblib")
-category_keywords   = joblib.load(MODEL_DIR / "category_keywords.joblib")
-preparation_keywords= joblib.load(MODEL_DIR / "preparation_keywords.joblib")
-metadata            = joblib.load(MODEL_DIR / "metadata.joblib")
-
-catboost_models: Dict[str, CatBoostRegressor] = {}
-for target in TARGETS:
-    cb = CatBoostRegressor()
-    cb.load_model(str(MODEL_DIR / f"{target}.cbm"))
-    catboost_models[target] = cb
-
-print(f"[OK] Loaded {len(catboost_models)} CatBoost models | SVD dims: {svd.n_components}")
-
-# ─────────────────────────────────────────────────────────────
-# 3.  PARSING HELPERS
-# ─────────────────────────────────────────────────────────────
-_WEIGHT_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:g|grams?|kg|kilograms?|ml|millilitres?|oz|ounces?|lb|lbs?|pounds?)",
-    re.IGNORECASE,
-)
-_G_PER_UNIT = {
-    "g": 1, "gram": 1, "grams": 1,
-    "kg": 1000, "kilogram": 1000, "kilograms": 1000,
-    "ml": 1,
-    "oz": 28.35, "ounce": 28.35, "ounces": 28.35,
-    "lb": 453.59, "lbs": 453.59, "pound": 453.59, "pounds": 453.59,
-}
-
-
-def _parse_weight(text: str) -> tuple[float, str]:
-    """Return (weight_g, text_without_weight_token)."""
-    m = re.search(
-        r"(\d+(?:\.\d+)?)\s*(g|grams?|kg|kilograms?|ml|millilitres?|oz|ounces?|lb|lbs?|pounds?)\b",
-        text, re.IGNORECASE,
+try:
+    from ML.schemas import (
+        IngredientIn, NutrientResult, RecipeTotals,
+        PredictRequest, PredictResponse,
+        VisionRequest, VisionNutrientResult, VisionPredictResponse
     )
-    if m:
-        qty = float(m.group(1))
-        unit = m.group(2).lower().rstrip("s") if m.group(2).lower() not in _G_PER_UNIT else m.group(2).lower()
-        # normalise unit
-        for key in _G_PER_UNIT:
-            if m.group(2).lower().startswith(key[:3]):
-                weight_g = qty * _G_PER_UNIT[key]
-                break
-        else:
-            weight_g = qty
-        cleaned = (text[: m.start()] + text[m.end():]).strip(" ,")
-        return weight_g, cleaned
-    return 100.0, text          # default 100 g
+    from ML.predictor import NutritionPredictor, TARGETS
+except ModuleNotFoundError:
+    from schemas import (
+        IngredientIn, NutrientResult, RecipeTotals,
+        PredictRequest, PredictResponse,
+        VisionRequest, VisionNutrientResult, VisionPredictResponse
+    )
+    from predictor import NutritionPredictor, TARGETS
 
+warnings.filterwarnings("ignore")
 
-def _detect_preparation(text: str) -> str:
-    text_l = text.lower()
-    for prep, keywords in preparation_keywords.items():
-        for kw in keywords:
-            if kw in text_l:
-                return prep
-    return "unknown"
+FRONTEND_DIR = MODEL_DIR.parent / "FrontEnd"
+VISION_SERVICE_URL = os.getenv("VISION_SERVICE_URL", "http://127.0.0.1:8001/vision")
 
+predictor = NutritionPredictor(MODEL_DIR)
 
-def _detect_category(text: str) -> str:
-    text_l = text.lower()
-    for cat in category_keywords:
-        if cat in text_l:
-            return cat
-    return "unknown"
-
-
-def _detect_attributes(text: str) -> List[int]:
-    text_l = text.lower()
-    flags = []
-    for attr in attribute_names:
-        kws = attribute_keywords.get(attr, [])
-        flags.append(1 if any(kw in text_l for kw in kws) else 0)
-    return flags
-
-
-ATTR_COLS = [f"attr_{a}" for a in attribute_names]
-CAT_FEATURES = ["category", "preparation"]
-
-# ── Dish → default preparation context ───────────────────────
-# Maps dish keywords → { ingredient keyword → preparation }
-DISH_PREP_CONTEXT: Dict[str, Dict[str, str]] = {
-    "biryani":      {"rice": "boiled", "chicken": "roasted", "mutton": "roasted",
-                     "lamb": "roasted", "egg": "boiled", "onion": "fried",
-                     "potato": "boiled"},
-    "curry":        {"chicken": "boiled", "mutton": "boiled", "lamb": "boiled",
-                     "paneer": "boiled", "potato": "boiled", "rice": "boiled"},
-    "fried rice":   {"rice": "boiled", "egg": "fried", "chicken": "fried",
-                     "vegetable": "fried", "onion": "fried"},
-    "pulao":        {"rice": "boiled", "chicken": "boiled", "vegetable": "boiled"},
-    "salad":        {"chicken": "grilled", "egg": "boiled", "tuna": "raw",
-                     "vegetable": "raw", "lettuce": "raw", "tomato": "raw"},
-    "sandwich":     {"chicken": "grilled", "egg": "boiled", "vegetable": "raw"},
-    "burger":       {"chicken": "fried", "beef": "fried", "patty": "fried"},
-    "stir fry":     {"chicken": "fried", "beef": "fried", "vegetable": "fried",
-                     "noodle": "boiled", "rice": "boiled"},
-    "soup":         {"chicken": "boiled", "vegetable": "boiled", "potato": "boiled"},
-    "dal":          {"lentil": "boiled", "dal": "boiled", "onion": "fried"},
-    "pasta":        {"pasta": "boiled", "chicken": "grilled", "vegetable": "boiled"},
-    "pizza":        {"chicken": "roasted", "cheese": "raw", "vegetable": "roasted"},
-}
-
-
-def _get_preparation_for_dish(dish: str, ingredient: str) -> Optional[str]:
-    """Return the most appropriate preparation for an ingredient given the dish."""
-    dish_l = dish.lower()
-    ingr_l = ingredient.lower()
-    for dish_key, ingr_map in DISH_PREP_CONTEXT.items():
-        if dish_key in dish_l:
-            for ingr_key, prep in ingr_map.items():
-                if ingr_key in ingr_l:
-                    return prep
-    return None
-
-
-# ── Tier 3: Ingredient-type smart defaults ────────────────────
-# When no dish context and no prep keyword in name, use this.
-INGREDIENT_DEFAULT_PREP: Dict[str, str] = {
-    # Grains (always served cooked)
-    "rice": "boiled",    "basmati": "boiled", "noodle": "boiled",
-    "pasta": "boiled",   "quinoa": "boiled",  "oat": "boiled",
-    "bread": "baked",    "roti": "baked",     "naan": "baked",
-    "chapati": "baked",  "paratha": "fried",
-    # Proteins (almost always cooked)
-    "chicken": "boiled", "mutton": "boiled",  "lamb": "boiled",
-    "beef": "boiled",    "pork": "boiled",    "fish": "boiled",
-    "prawn": "boiled",   "shrimp": "boiled",  "egg": "boiled",
-    "tuna": "raw",       "salmon": "raw",
-    # Legumes (always cooked)
-    "dal": "boiled",     "lentil": "boiled",  "bean": "boiled",
-    "chickpea": "boiled","pea": "boiled",
-    # Vegetables (default boiled)
-    "potato": "boiled",  "carrot": "boiled",  "spinach": "boiled",
-    "onion": "boiled",   "tomato": "boiled",  "broccoli": "boiled",
-    "cauliflower": "boiled", "cabbage": "boiled", "corn": "boiled",
-    # Fruits (raw)
-    "apple": "raw",   "banana": "raw",  "mango": "raw",
-    "orange": "raw",  "grape": "raw",   "berry": "raw",
-    # Dairy (raw)
-    "milk": "raw",    "cheese": "raw",  "paneer": "raw",
-    "yogurt": "raw",  "curd": "raw",    "butter": "raw",
-}
-
-
-def _ingredient_default_prep(food_name: str) -> Optional[str]:
-    """Return smart default preparation based on ingredient type."""
-    name_l = food_name.lower()
-    for keyword, prep in INGREDIENT_DEFAULT_PREP.items():
-        if keyword in name_l:
-            return prep
-    return None
-
-
-def _resolve_preparation(dish: Optional[str], food_name: str) -> str:
-    """
-    3-tier preparation resolution — prevents 'unknown' for common foods:
-      1. Dish context      e.g. Biryani  → rice = boiled
-      2. Name keyword      e.g. 'grilled chicken' → grilled
-      3. Ingredient default e.g. 'chicken' → boiled
-      4. Final fallback    'boiled'
-    """
-    if dish:
-        prep = _get_preparation_for_dish(dish, food_name)
-        if prep:
-            return prep
-    prep = _detect_preparation(food_name)
-    if prep != "unknown":
-        return prep
-    prep = _ingredient_default_prep(food_name)
-    if prep:
-        return prep
-    return "boiled"
-
-
-def _build_pool(food_name: str, category: str, preparation: str, attributes: List[int]) -> Pool:
-    """Build a CatBoost Pool matching the model's expected feature schema."""
-    tfidf_vec = vectorizer.transform([food_name])
-    svd_vec   = svd.transform(tfidf_vec)[0]        # shape (64,)
-    text_cols = {f"text_{i}": float(svd_vec[i]) for i in range(len(svd_vec))}
-    cat_col   = {"category": str(category), "preparation": str(preparation)}
-    attr_col  = {col: int(val) for col, val in zip(ATTR_COLS, attributes)}
-    df = pd.DataFrame([{**text_cols, **cat_col, **attr_col}])
-    return Pool(df, cat_features=CAT_FEATURES)
-
+# Backward-compatibility aliases for tests/scripts importing from ML.app
+catboost_models = predictor.catboost_models
+svd = predictor.svd
+vectorizer = predictor.vectorizer
 
 # ─────────────────────────────────────────────────────────────
-# 4.  FASTAPI APP
+# 2. FASTAPI APPLICATION
 # ─────────────────────────────────────────────────────────────
 app = FastAPI(
     title="NutraVision Prediction API",
     description=(
-        "Predict nutritional values for a list of ingredients using "
-        "CatBoost regressors trained on a food nutrition dataset.\n\n"
-        "Predictions are **per 100 g** then scaled to the supplied weight.\n\n"
-        "**Supported targets:** energy_kcal, carb_g, protein_g, fat_g, fibre_g"
+        "Predict nutritional values for meals and ingredients using "
+        "CatBoost multi-target regression with 3-tier contextual preparation resolution.\n\n"
+        "Supported targets: energy_kcal, carb_g, protein_g, fat_g, fibre_g"
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -255,65 +79,10 @@ app.add_middleware(
 )
 
 
-# ── Pydantic schemas ──────────────────────────────────────────
-class IngredientIn(BaseModel):
-    name: str = Field(
-        ...,
-        description='Free-text ingredient, e.g. "150g grilled chicken" or just "apple"',
-        examples=["150g grilled chicken", "50g basmati rice", "apple"],
-    )
-    weight_g: Optional[float] = Field(
-        None,
-        description="Explicit weight override in grams (overrides any amount parsed from name)",
-        examples=[100, 250],
-    )
-    category: Optional[str] = Field(
-        None,
-        description="Food category hint (poultry/meat/seafood/grain/vegetable/fruit/dairy/egg/legume/nut)",
-    )
-    preparation: Optional[str] = Field(
-        None,
-        description="Preparation hint (raw/boiled/grilled/roasted/fried/steamed/baked/dried/unknown)",
-    )
-
-
-class NutrientResult(BaseModel):
-    entered_item:  str
-    parsed_food:   str
-    weight_g:      float
-    category:      str
-    preparation:   str
-    energy_kcal:   float
-    carb_g:        float
-    protein_g:     float
-    fat_g:         float
-    fibre_g:       float
-
-
-class RecipeTotals(BaseModel):
-    total_weight_g: float
-    energy_kcal:    float
-    carb_g:         float
-    protein_g:      float
-    fat_g:          float
-    fibre_g:        float
-
-
-class PredictRequest(BaseModel):
-    ingredients: List[IngredientIn] = Field(
-        ...,
-        description="List of ingredients to analyse",
-        min_length=1,
-    )
-
-
-class PredictResponse(BaseModel):
-    ingredients:   List[NutrientResult]
-    recipe_totals: RecipeTotals
-
-
-# ── Routes ───────────────────────────────────────────────────
-@app.get("/", tags=["Health"], summary="Root ping")
+# ─────────────────────────────────────────────────────────────
+# 3. ROUTES
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/info", tags=["Health"], summary="API info")
 def root():
     return {
         "service": "NutraVision Prediction API",
@@ -337,136 +106,33 @@ def health():
     response_model=PredictResponse,
     tags=["Nutrition"],
     summary="Predict nutritional values for a list of ingredients",
-    description=(
-        "Accepts a JSON list of ingredients and returns:\n"
-        "- **Per-ingredient breakdown**: energy_kcal, carb_g, protein_g, fat_g, fibre_g\n"
-        "- **Recipe totals**: summed values across all ingredients\n\n"
-        "| Input style | Behaviour |\n"
-        "|---|---|\n"
-        "| `\"150g grilled chicken\"` | 150 g, food = grilled chicken |\n"
-        "| `\"50 grams basmati rice\"` | 50 g, food = basmati rice |\n"
-        "| `\"apple\"` | defaults to **100 g** |\n"
-        "| `{\"name\": \"broccoli\", \"weight_g\": 80}` | explicit 80 g override |"
-    ),
 )
 def predict(request: PredictRequest) -> PredictResponse:
-    results: List[NutrientResult] = []
-    totals = {t: 0.0 for t in TARGETS}
-    total_weight = 0.0
-
-    for item in request.ingredients:
-        # 4a. Parse weight + clean food name
-        weight_g, food_name = _parse_weight(item.name)
-        if item.weight_g is not None:
-            weight_g = item.weight_g         # explicit override wins
-
-        # 4b. Detect / override preparation & category
-        preparation = item.preparation or _resolve_preparation(None, food_name)
-        category    = item.category    or _detect_category(item.name)
-        attributes  = _detect_attributes(item.name)
-
-        # 4c. Build CatBoost Pool
-        try:
-            pool = _build_pool(food_name, category, preparation, attributes)
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Feature extraction failed for '{item.name}': {exc}")
-
-        # 4d. Run CatBoost models  (predictions are per 100 g)
-        preds_per100g: Dict[str, float] = {}
-        for target, model in catboost_models.items():
-            try:
-                val = float(model.predict(pool)[0])
-                preds_per100g[target] = max(val, 0.0)   # clamp negatives
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"Model error for '{target}': {exc}")
-
-        # 4e. Scale to actual weight
-        scale = weight_g / 100.0
-        scaled = {t: round(v * scale, 2) for t, v in preds_per100g.items()}
-
-        results.append(NutrientResult(
-            entered_item=item.name,
-            parsed_food=food_name,
-            weight_g=weight_g,
-            category=category,
-            preparation=preparation,
-            **scaled,
-        ))
-
-        total_weight += weight_g
-        for t in TARGETS:
-            totals[t] += scaled[t]
-
-    return PredictResponse(
-        ingredients=results,
-        recipe_totals=RecipeTotals(
-            total_weight_g=round(total_weight, 2),
-            **{t: round(v, 2) for t, v in totals.items()},
-        ),
-    )
-
-
-# ─────────────────────────────────────────────────────────────
-# 5.  VISION MODEL ENDPOINT
-# Accepts the raw JSON from the vision model unchanged.
-# Reads ingredients from:
-#   - "ingredients" dict  → { "Rice": 440, "Chicken": 90, ... }
-#   - falls back to "estimates" array → weight_g.estimate per item
-# ─────────────────────────────────────────────────────────────
-
-class VisionRequest(BaseModel):
-    """Accepts the full vision model JSON as-is. Only 'ingredients' is required."""
-    dish:        Optional[str]       = None
-    ingredients: Optional[Dict[str, Any]] = None   # { "Rice": 440, ... }
-    estimates:   Optional[List[Dict[str, Any]]] = None
-    # all other vision fields (scale_reference, segmentation, etc.) are ignored
-    model_config = {"extra": "allow"}              # allow unknown fields
-
-
-class VisionNutrientResult(BaseModel):
-    ingredient:  str
-    weight_g:    float
-    energy_kcal: float
-    carb_g:      float
-    protein_g:   float
-    fat_g:       float
-    fibre_g:     float
-
-
-class VisionPredictResponse(BaseModel):
-    dish:          Optional[str]
-    nutrition:     List[VisionNutrientResult]
-    recipe_totals: RecipeTotals
+    return predictor.predict_ingredients(request.ingredients)
 
 
 @app.post(
     "/predict/vision",
     response_model=VisionPredictResponse,
     tags=["Nutrition"],
-    summary="Predict nutrition from vision model JSON",
-    description=(
-        "Accepts the **raw JSON output from the vision model** unchanged.\n\n"
-        "Extracts ingredient names + weights from the `ingredients` dict "
-        "`{ 'Rice': 440, 'Chicken': 90 }` and returns nutritional predictions.\n\n"
-        "Falls back to `estimates[].weight_g.estimate` if `ingredients` is missing."
-    ),
+    summary="Predict nutrition from vision model output",
 )
 def predict_vision(request: VisionRequest) -> VisionPredictResponse:
-    # ── 1. Extract ingredient → weight pairs ──────────────────
-    pairs: List[tuple[str, float]] = []
+    pairs: List[Tuple[str, float]] = []
 
     if request.ingredients:
-        # Primary source: { "Rice": 440, "Chicken": 90, ... }
         for name, weight in request.ingredients.items():
             try:
-                pairs.append((str(name), float(weight)))
+                w_val = float(weight)
+                if w_val < 0:
+                    raise HTTPException(status_code=422, detail=f"Weight cannot be negative for '{name}': {weight}")
+                pairs.append((str(name), w_val))
             except (TypeError, ValueError):
                 raise HTTPException(
                     status_code=422,
                     detail=f"Invalid weight for ingredient '{name}': {weight}"
                 )
     elif request.estimates:
-        # Fallback: estimates[].weight_g.estimate
         for est in request.estimates:
             name = est.get("name", "unknown")
             wg = est.get("weight_g", {})
@@ -481,57 +147,93 @@ def predict_vision(request: VisionRequest) -> VisionPredictResponse:
             detail="Request must contain either 'ingredients' dict or 'estimates' array."
         )
 
-    # ── 2. Run predictions (same pipeline as /predict) ────────
-    results: List[VisionNutrientResult] = []
-    totals = {t: 0.0 for t in TARGETS}
-    total_weight = 0.0
+    return predictor.predict_vision_pairs(request.dish, pairs)
 
-    for food_name, weight_g in pairs:
-        # Full 3-tier preparation resolution
-        preparation = _resolve_preparation(request.dish, food_name)
-        category   = _detect_category(food_name)
-        attributes = _detect_attributes(food_name)
 
-        try:
-            pool = _build_pool(food_name, category, preparation, attributes)
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Feature error for '{food_name}': {exc}")
+@app.post(
+    "/analyze/dual",
+    tags=["Integration"],
+    summary="End-to-End Dual Image Food Analysis",
+    description="Forwards dual photos to Vision Service (8001), strips extra keys, and predicts nutrition via CatBoost."
+)
+async def analyze_dual(
+    top_image: UploadFile = File(..., description="Top-down overhead photo"),
+    side_image: UploadFile = File(None, description="Side-view photo at plate level"),
+    plate_diameter_cm: float = Form(25.0, description="Plate diameter in cm (default 25.0)"),
+):
+    if plate_diameter_cm <= 0:
+        raise HTTPException(status_code=422, detail="plate_diameter_cm must be positive")
 
-        preds_per100g: Dict[str, float] = {}
-        for target, model in catboost_models.items():
-            try:
-                val = float(model.predict(pool)[0])
-                preds_per100g[target] = max(val, 0.0)
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"Model error for '{target}': {exc}")
+    top_bytes = await top_image.read()
+    side_bytes = await side_image.read() if side_image else top_bytes
 
-        scale  = weight_g / 100.0
-        scaled = {t: round(v * scale, 2) for t, v in preds_per100g.items()}
-
-        results.append(VisionNutrientResult(
-            ingredient=food_name,
-            weight_g=weight_g,
-            **scaled,
-        ))
-
-        total_weight += weight_g
-        for t in TARGETS:
-            totals[t] += scaled[t]
-
-    return VisionPredictResponse(
-        dish=request.dish,
-        nutrition=results,
-        recipe_totals=RecipeTotals(
-            total_weight_g=round(total_weight, 2),
-            **{t: round(v, 2) for t, v in totals.items()},
+    files = {
+        "top_image": (top_image.filename or "top.jpg", top_bytes, top_image.content_type or "image/jpeg"),
+        "side_image": (
+            (side_image.filename or "side.jpg") if side_image else "side.jpg",
+            side_bytes,
+            (side_image.content_type if side_image else "image/jpeg") or "image/jpeg",
         ),
-    )
+    }
+    data = {"plate_diameter_cm": str(plate_diameter_cm)}
+
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            v_resp = await client.post(VISION_SERVICE_URL, files=files, data=data)
+            v_resp.raise_for_status()
+            vision_data = v_resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cannot connect to Vision API at {VISION_SERVICE_URL}. Ensure vision service is running on port 8001."
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"Vision API returned error: {exc.response.text[:300]}"
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Vision communication failure: {exc}")
+
+    dish = vision_data.get("dish")
+    ingredients = vision_data.get("ingredients") or {}
+
+    req = VisionRequest(dish=dish, ingredients=ingredients)
+    nutr = predict_vision(req)
+
+    return {
+        "dish": dish,
+        "ingredients": ingredients,
+        "estimates": vision_data.get("estimates", []),
+        "scale_reference": vision_data.get("scale_reference", {}),
+        "nutrition": nutr.nutrition,
+        "recipe_totals": nutr.recipe_totals,
+        "limitations": vision_data.get("limitations", []),
+        "segmentation": vision_data.get("segmentation", {}),
+    }
 
 
 # ─────────────────────────────────────────────────────────────
-# 6.  DEV ENTRY-POINT
+# 4. STATIC FRONTEND SERVING
 # ─────────────────────────────────────────────────────────────
+if FRONTEND_DIR.is_dir():
+    images_dir = FRONTEND_DIR / "images"
+    if images_dir.is_dir():
+        app.mount("/images", StaticFiles(directory=images_dir), name="images")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index():
+        return FileResponse(FRONTEND_DIR / "index.html")
+
+    @app.get("/style.css", include_in_schema=False)
+    async def serve_css():
+        return FileResponse(FRONTEND_DIR / "style.css", media_type="text/css")
+
+    @app.get("/script.js", include_in_schema=False)
+    async def serve_js():
+        return FileResponse(FRONTEND_DIR / "script.js", media_type="application/javascript")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
-

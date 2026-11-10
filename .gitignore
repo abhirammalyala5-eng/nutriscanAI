@@ -3,14 +3,29 @@
 .venv_*/
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
 
-# Local model downloads and caches (the API checkpoint in vision/models is tracked)
+# Local model weights and serialized artifacts (too large for git)
+*.cbm
+*.joblib
+*.onnx
+
+# Local model downloads and caches
 /.ultralytics/
 /.cache/
 /models/
 **/.cache/
 
-# Local configuration and logs
+# Local configuration, artifacts, and logs
 .env
 *.log
+*.bak
+*.tmp
+catboost_info/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

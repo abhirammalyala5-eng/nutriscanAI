@@ -1,5 +1,10 @@
-"""Compatibility entry point. The backend implementation lives in vision/app.py."""
+"""
+app.py - NutraVision Main Application Entry Point
+==================================================
+Serves the CatBoost Nutritional Regression API, the end-to-end
+dual-view analysis orchestrator, and the static FrontEnd UI.
+"""
 
-from vision.app import app
+from ML.app import app
 
 __all__ = ["app"]
